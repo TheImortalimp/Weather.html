@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.theimortalimp.twa",
+        "sha256_cert_fingerprints": ["E0:48:6D:0D:F1:DF:41:AC:60:73:25:28:75:3C:45:33:86:A2:79:D3:28:B1:B0:76:9D:9A:1B:0B:E7:65:99:53"]
+      }
+    }]

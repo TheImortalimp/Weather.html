@@ -280,6 +280,7 @@
         <button id="locateBtn" type="button">Use My Location</button>
         <input id="cityInput" type="text" placeholder="Or search city (example: Seattle)">
         <button id="cityBtn" type="button">Search City</button>
+        <button id="resetLocationBtn" type="button">Reset Location</button>
       </div>
       <div class="clock-wrap" aria-live="polite">
         <span id="localClock" class="clock-time">--:--:--</span>
@@ -313,15 +314,18 @@
 
     <section class="card">
       <h2>Public Place Photos</h2>
-      <p>Optional preview images sourced from Wikimedia Commons by place name.</p>
+      <p>
+        Optional preview images from Google Places or Bing Image Search when configured,
+        with Wikimedia Commons fallback when no official source is available.
+      </p>
       <div id="gallery" class="gallery"></div>
     </section>
 
     <section class="card">
       <h2>Open-Source Components</h2>
       <p>
-        Data and libraries: Open-Meteo, OpenStreetMap, Overpass API, Leaflet, Wikimedia Commons.
-        Suitable for open-source projects with transparent permission prompts.
+        Core stack: Open-Meteo, OpenStreetMap, Nominatim, Overpass API, Leaflet, and Wikimedia Commons.
+        Optional photo providers: Google Places API and Bing Image Search API (requires your own keys).
       </p>
     </section>
   </main>
@@ -336,9 +340,15 @@
     const cityInput = document.getElementById("cityInput");
     const locateBtn = document.getElementById("locateBtn");
     const cityBtn = document.getElementById("cityBtn");
+    const resetLocationBtn = document.getElementById("resetLocationBtn");
     const localClockEl = document.getElementById("localClock");
     const timeZoneLabelEl = document.getElementById("timeZoneLabel");
     const LIVE_REFRESH_MS = 150000;
+    const ACCURACY_TARGET_METERS = 50;
+    const ACCURACY_TIMEOUT_MS = 20000;
+    const GOOGLE_PLACES_API_KEY = String(window.GOOGLE_PLACES_API_KEY || "").trim();
+    const BING_IMAGE_SEARCH_KEY = String(window.BING_IMAGE_SEARCH_KEY || "").trim();
+    const IMAGE_SEARCH_PROXY = String(window.IMAGE_SEARCH_PROXY || "").trim();
 
     const weatherCodeMap = {
       0: "Clear sky",
@@ -397,6 +407,62 @@
       return `<article class="metric"><h3>${label}</h3><p>${value}</p></article>`;
     }
 
+    function scoreAddressMatch(result, queryParts) {
+      const address = result.address || {};
+      const haystack = [
+        result.display_name || "",
+        address.house_number || "",
+        address.road || "",
+        address.neighbourhood || "",
+        address.suburb || "",
+        address.city || address.town || address.village || "",
+        address.postcode || "",
+        address.country || ""
+      ].join(" ").toLowerCase();
+
+      let score = 0;
+      queryParts.forEach((part) => {
+        if (!part) return;
+        const token = part.toLowerCase();
+        if (haystack.includes(token)) score += 3;
+        if (address.house_number && token === String(address.house_number).toLowerCase()) score += 4;
+      });
+
+      if (typeof result.importance === "number") score += result.importance * 10;
+      if (result.class === "place") score += 1;
+      return score;
+    }
+
+    async function getBestAddressMatch(query) {
+      const rawParts = query
+        .split(/[\n,]/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        addressdetails: "1",
+        namedetails: "1",
+        limit: "8",
+        q: query.trim()
+      });
+
+      const response = await fetchJsonWithTimeout(`https://nominatim.openstreetmap.org/search?${params.toString()}`, 12000);
+      if (!response.ok) throw new Error("Address lookup failed.");
+
+      const results = await response.json();
+      if (!Array.isArray(results) || !results.length) throw new Error("Address not found.");
+
+      const scored = results
+        .map((result) => ({
+          result,
+          score: scoreAddressMatch(result, rawParts)
+        }))
+        .sort((a, b) => b.score - a.score || (b.result.importance || 0) - (a.result.importance || 0));
+
+      return scored[0].result;
+    }
+
     function startLocalClock() {
       const resolvedZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local timezone";
       timeZoneLabelEl.textContent = `Timezone: ${resolvedZone}`;
@@ -434,11 +500,43 @@
       }, LIVE_REFRESH_MS);
     }
 
-    async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
+    function clearCurrentLocation() {
+      selectedLocation = null;
+      liveMode = "none";
+      cityInput.blur();
+      cityInput.value = "";
+      cityInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+      if (refreshTimerId) {
+        clearInterval(refreshTimerId);
+        refreshTimerId = null;
+      }
+
+      if (userMarker) {
+        map.removeLayer(userMarker);
+        userMarker = null;
+      }
+
+      placeLayer.clearLayers();
+      map.setView([20, 0], 2);
+      locationLabel.textContent = "No location selected.";
+      weatherGrid.innerHTML = "";
+      placesList.innerHTML = "<div class=\"place\">No nearby places found in this radius.</div>";
+      gallery.innerHTML = "";
+      setStatus("Location reset. Polling your current position again every 2.5 minutes.");
+    }
+
+    function withOptionalProxy(url) {
+      if (!IMAGE_SEARCH_PROXY) return url;
+      const prefix = IMAGE_SEARCH_PROXY.endsWith("/") ? IMAGE_SEARCH_PROXY : `${IMAGE_SEARCH_PROXY}/`;
+      return `${prefix}${encodeURIComponent(url)}`;
+    }
+
+    async function fetchJsonWithTimeout(url, timeoutMs = 9000, requestInit = {}) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const response = await fetch(url, { signal: controller.signal });
+        const response = await fetch(url, { ...requestInit, signal: controller.signal });
         return response;
       } finally {
         clearTimeout(timeoutId);
@@ -446,7 +544,7 @@
     }
 
     async function reverseLabel(lat, lon) {
-      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2`;
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&addressdetails=1&zoom=18`;
       const response = await fetchJsonWithTimeout(url, 7000);
       if (!response.ok) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
       const data = await response.json();
@@ -454,15 +552,13 @@
     }
 
     async function searchCity(city) {
-      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(city)}&limit=1`;
-      const response = await fetchJsonWithTimeout(url, 9000);
-      if (!response.ok) throw new Error("City lookup failed.");
-      const data = await response.json();
-      if (!data.length) throw new Error("City not found.");
+      const best = await getBestAddressMatch(city);
       return {
-        lat: Number(data[0].lat),
-        lon: Number(data[0].lon),
-        label: data[0].display_name
+        lat: Number(best.lat),
+        lon: Number(best.lon),
+        label: best.display_name,
+        source: "geocoder",
+        accuracy: Number.isFinite(Number(best.importance)) ? Math.max(0, Math.round((1 - Number(best.importance)) * 1000)) : null
       };
     }
 
@@ -523,14 +619,83 @@
       }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 18);
     }
 
-    async function fetchPhotoForPlace(placeName) {
+    async function fetchGooglePhotoForPlace(placeName) {
+      if (!GOOGLE_PLACES_API_KEY) return null;
+
+      const searchUrl = withOptionalProxy(
+        `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(placeName)}&inputtype=textquery&fields=name,photos,place_id&key=${encodeURIComponent(GOOGLE_PLACES_API_KEY)}`
+      );
+
+      const response = await fetchJsonWithTimeout(searchUrl, 9000);
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const candidate = Array.isArray(data.candidates) ? data.candidates[0] : null;
+      const photoRef = candidate && Array.isArray(candidate.photos) && candidate.photos[0]
+        ? candidate.photos[0].photo_reference
+        : null;
+
+      if (!photoRef) return null;
+      return {
+        url: `https://maps.googleapis.com/maps/api/place/photo?maxwidth=640&photo_reference=${encodeURIComponent(photoRef)}&key=${encodeURIComponent(GOOGLE_PLACES_API_KEY)}`,
+        source: "Google Places"
+      };
+    }
+
+    async function fetchBingPhotoForPlace(placeName) {
+      if (!BING_IMAGE_SEARCH_KEY) return null;
+
+      const searchUrl = withOptionalProxy(
+        `https://api.bing.microsoft.com/v7.0/images/search?q=${encodeURIComponent(placeName)}&count=1&safeSearch=Moderate`
+      );
+
+      const response = await fetchJsonWithTimeout(searchUrl, 9000, {
+        headers: {
+          "Ocp-Apim-Subscription-Key": BING_IMAGE_SEARCH_KEY
+        }
+      });
+
+      if (!response.ok) return null;
+      const data = await response.json();
+      const first = Array.isArray(data.value) ? data.value[0] : null;
+      if (!first || !first.contentUrl) return null;
+
+      return {
+        url: first.contentUrl,
+        source: "Bing"
+      };
+    }
+
+    async function fetchWikimediaPhotoForPlace(placeName) {
       const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(placeName)}&gsrlimit=1&prop=pageimages&pithumbsize=340&format=json&origin=*`;
-      const response = await fetch(url);
+      const response = await fetchJsonWithTimeout(url, 7000);
       if (!response.ok) return null;
       const data = await response.json();
       const pages = data.query && data.query.pages ? Object.values(data.query.pages) : [];
       if (!pages.length || !pages[0].thumbnail || !pages[0].thumbnail.source) return null;
-      return pages[0].thumbnail.source;
+      return {
+        url: pages[0].thumbnail.source,
+        source: "Wikimedia Commons"
+      };
+    }
+
+    async function fetchPhotoForPlace(placeName) {
+      const providers = [
+        fetchGooglePhotoForPlace,
+        fetchBingPhotoForPlace,
+        fetchWikimediaPhotoForPlace
+      ];
+
+      for (const provider of providers) {
+        try {
+          const result = await provider(placeName);
+          if (result && result.url) return result;
+        } catch (error) {
+          console.warn("Photo provider failed:", error);
+        }
+      }
+
+      return null;
     }
 
     function updateMap(lat, lon, label, places) {
@@ -589,13 +754,14 @@
 
       gallery.innerHTML = "";
       candidates.forEach((place, index) => {
-        const img = images[index];
-        const imageTag = img ? `<img src="${img}" alt="Photo for ${place.name}">` : "<img alt=\"No photo available\">";
-        gallery.insertAdjacentHTML("beforeend", `<figure>${imageTag}<figcaption>${place.name}</figcaption></figure>`);
+        const photo = images[index];
+        const imageTag = photo ? `<img src="${photo.url}" alt="Photo for ${place.name}">` : "<img alt=\"No photo available\">";
+        const sourceTag = photo ? ` <span class="small">(${photo.source})</span>` : "";
+        gallery.insertAdjacentHTML("beforeend", `<figure>${imageTag}<figcaption>${place.name}${sourceTag}</figcaption></figure>`);
       });
     }
 
-    async function loadDashboard(lat, lon, explicitLabel, isAutoRefresh = false) {
+    async function loadDashboard(lat, lon, explicitLabel, isAutoRefresh = false, meta = {}) {
       if (refreshInProgress) {
         if (!isAutoRefresh) {
           setStatus("Update already in progress...");
@@ -623,9 +789,17 @@
           ? (labelResult.value || `${lat.toFixed(4)}, ${lon.toFixed(4)}`)
           : `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
 
-        selectedLocation = { lat, lon, label };
+        selectedLocation = { lat, lon, label, ...meta };
 
-        locationLabel.textContent = label;
+        const accuracyText = meta.accuracyMeters
+          ? ` • accuracy ~${Math.round(meta.accuracyMeters)} m`
+          : meta.source === "geolocation"
+            ? " • accuracy unknown"
+            : meta.source === "geocoder"
+              ? " • geocoder match"
+              : "";
+
+        locationLabel.textContent = `${label}${accuracyText}`;
         renderWeather(weatherData);
         await renderPlaces(places);
         updateMap(lat, lon, label, places);
@@ -652,15 +826,52 @@
         setStatus("Requesting your location permission...");
       }
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          loadDashboard(position.coords.latitude, position.coords.longitude, undefined, isAutoRefresh);
-        },
-        (error) => {
+      const options = {
+        enableHighAccuracy: true,
+        timeout: ACCURACY_TIMEOUT_MS,
+        maximumAge: 0
+      };
+
+      const resolveOnce = () => new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      });
+
+      const gatherFixes = async () => {
+        const fixes = [];
+        let lastError = null;
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const position = await resolveOnce();
+            fixes.push(position);
+            if (position.coords.accuracy <= ACCURACY_TARGET_METERS) break;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        if (!fixes.length) {
+          throw lastError || new Error("Location unavailable.");
+        }
+
+        fixes.sort((a, b) => a.coords.accuracy - b.coords.accuracy);
+        return fixes[0];
+      };
+
+      gatherFixes()
+        .then((position) => loadDashboard(
+          position.coords.latitude,
+          position.coords.longitude,
+          undefined,
+          isAutoRefresh,
+          {
+            source: "geolocation",
+            accuracyMeters: position.coords.accuracy
+          }
+        ))
+        .catch((error) => {
           setStatus(`Location error: ${error.message}`, true);
-        },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 }
-      );
+        });
     }
 
     locateBtn.addEventListener("click", () => {
@@ -681,10 +892,20 @@
         const result = await searchCity(city);
         liveMode = "fixed";
         startLiveRefresh();
-        await loadDashboard(result.lat, result.lon, result.label, false);
+        await loadDashboard(result.lat, result.lon, result.label, false, {
+          source: result.source,
+          accuracyMeters: result.accuracy
+        });
       } catch (error) {
         setStatus(error.message || "City search failed.", true);
       }
+    });
+
+    resetLocationBtn.addEventListener("click", () => {
+      clearCurrentLocation();
+      liveMode = "device";
+      startLiveRefresh();
+      requestDeviceLocationUpdate(false);
     });
 
     if ("serviceWorker" in navigator) {
