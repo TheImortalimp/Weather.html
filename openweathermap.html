@@ -6,10 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Single-device, privacy-first weather and local places explorer powered by open data.">
   <meta name="theme-color" content="#125b9a">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="OpenWeatherMap">
-  <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/png" href="./icons/icon-192.png">
   <link rel="preconnect" href="https://api.open-meteo.com">
   <link rel="preconnect" href="https://overpass-api.de">
@@ -284,6 +280,11 @@
         <span id="localClock" class="clock-time">--:--:--</span>
         <span id="timeZoneLabel" class="clock-zone">Detecting local timezone...</span>
       </div>
+      <div class="clock-wrap" aria-live="polite">
+        <span id="compassHeading" class="clock-time">Compass: --</span>
+        <span id="compassState" class="clock-zone">Compass inactive</span>
+        <button id="enableCompassBtn" type="button">Enable Compass</button>
+      </div>
       <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
       <p class="small">
         Privacy note: this page uses one device location only, does not scan other devices, and does not use personal identity data.
@@ -338,6 +339,9 @@
     const resetLocationBtn = document.getElementById("resetLocationBtn");
     const localClockEl = document.getElementById("localClock");
     const timeZoneLabelEl = document.getElementById("timeZoneLabel");
+    const compassHeadingEl = document.getElementById("compassHeading");
+    const compassStateEl = document.getElementById("compassState");
+    const enableCompassBtn = document.getElementById("enableCompassBtn");
     const LIVE_REFRESH_MS = 150000;
     const ACCURACY_TARGET_METERS = 50;
     const ACCURACY_TIMEOUT_MS = 20000;
@@ -395,6 +399,7 @@
     let liveMode = "none";
     let selectedLocation = null;
     let cacheStore = loadCacheStore();
+    let compassStarted = false;
 
     function loadCacheStore() {
       try {
@@ -563,6 +568,67 @@
 
       tick();
       setInterval(tick, 1000);
+    }
+
+    function normalizeHeading(value) {
+      if (!Number.isFinite(value)) return null;
+      const normalized = ((value % 360) + 360) % 360;
+      return normalized;
+    }
+
+    function toCardinal(heading) {
+      const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+      const idx = Math.round(heading / 45) % 8;
+      return labels[idx];
+    }
+
+    function setCompassHeading(heading) {
+      const normalized = normalizeHeading(heading);
+      if (normalized === null) {
+        compassHeadingEl.textContent = "Compass: --";
+        compassStateEl.textContent = "Compass unavailable";
+        return;
+      }
+      compassHeadingEl.textContent = `Compass: ${Math.round(normalized)} deg (${toCardinal(normalized)})`;
+      compassStateEl.textContent = "Compass active on this device";
+    }
+
+    function attachCompassListeners() {
+      if (compassStarted) return;
+      compassStarted = true;
+
+      const handleOrientation = (event) => {
+        const webkitValue = typeof event.webkitCompassHeading === "number" ? event.webkitCompassHeading : null;
+        const alpha = typeof event.alpha === "number" ? (360 - event.alpha) : null;
+        setCompassHeading(webkitValue !== null ? webkitValue : alpha);
+      };
+
+      window.addEventListener("deviceorientationabsolute", handleOrientation, true);
+      window.addEventListener("deviceorientation", handleOrientation, true);
+    }
+
+    async function startCompass() {
+      if (!("DeviceOrientationEvent" in window)) {
+        compassStateEl.textContent = "Compass not supported by this browser";
+        return;
+      }
+
+      const requestPermission = DeviceOrientationEvent.requestPermission;
+      if (typeof requestPermission === "function") {
+        try {
+          const state = await requestPermission();
+          if (state !== "granted") {
+            compassStateEl.textContent = "Compass permission denied";
+            return;
+          }
+        } catch (error) {
+          compassStateEl.textContent = "Compass permission blocked";
+          return;
+        }
+      }
+
+      attachCompassListeners();
+      compassStateEl.textContent = "Waiting for heading...";
     }
 
     function startLiveRefresh() {
@@ -1010,13 +1076,9 @@
       requestDeviceLocationUpdate(false);
     });
 
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch((error) => {
-          console.error("Service worker registration failed:", error);
-        });
-      });
-    }
+    enableCompassBtn.addEventListener("click", () => {
+      startCompass();
+    });
 
     startLocalClock();
   </script>
