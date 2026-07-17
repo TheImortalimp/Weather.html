@@ -23,20 +23,29 @@ This project now includes:
 - `icons/icon-192.svg`
 - `icons/icon-512.svg`
 
-## Publish As Free Google Play App
+## Free GitHub PWA
 
-1. Host this app on HTTPS (GitHub Pages, Azure Static Web Apps, or similar).
-2. Verify the hosted URL loads `Weather.html` and `manifest.webmanifest` correctly.
-3. Open Microsoft PWABuilder: https://www.pwabuilder.com
-4. Enter your hosted app URL and generate an Android package (TWA).
-5. Create or use a Google Play Console account.
-6. Upload the generated Android App Bundle (`.aab`) and publish as a free app.
+1. Host this app on HTTPS using GitHub Pages.
+2. Install it from the browser as a PWA.
+3. Keep the app updated by pushing changes to this repository.
+
+## Android Release Without Play Store
+
+If you want Android distribution without paying the Google Play registration fee, use a GitHub Release or direct download page.
+
+Recommended path:
+
+1. Build an Android APK from the PWABuilder package already generated for this project.
+2. Upload the APK to a GitHub Release.
+3. Share the GitHub Releases page with users so they can download and install it manually.
+
+This keeps the project free for end users and avoids Play Console registration costs.
 
 ## Access Requirement
 
 - End users only need an internet connection and a modern browser/app runtime.
-- Publishing requires a Google account (Play Console).
-- Microsoft account is optional if you use Microsoft hosting/services or PWABuilder workflows.
+- Publishing to Google Play still requires a Google Play Console account and the one-time registration fee.
+- GitHub Pages and GitHub Releases are free for public distribution.
 
 ## License
 
