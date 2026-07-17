@@ -284,6 +284,7 @@
         <span id="compassHeading" class="clock-time">Compass: --</span>
         <span id="compassState" class="clock-zone">Compass inactive</span>
         <button id="enableCompassBtn" type="button">Enable Compass</button>
+        <button id="disableCompassBtn" type="button">Disable Compass</button>
       </div>
       <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
       <p class="small">
@@ -342,6 +343,7 @@
     const compassHeadingEl = document.getElementById("compassHeading");
     const compassStateEl = document.getElementById("compassState");
     const enableCompassBtn = document.getElementById("enableCompassBtn");
+    const disableCompassBtn = document.getElementById("disableCompassBtn");
     const LIVE_REFRESH_MS = 150000;
     const ACCURACY_TARGET_METERS = 50;
     const ACCURACY_TIMEOUT_MS = 20000;
@@ -400,6 +402,7 @@
     let selectedLocation = null;
     let cacheStore = loadCacheStore();
     let compassStarted = false;
+    let compassHandler = null;
 
     function loadCacheStore() {
       try {
@@ -597,14 +600,29 @@
       if (compassStarted) return;
       compassStarted = true;
 
-      const handleOrientation = (event) => {
+      compassHandler = (event) => {
         const webkitValue = typeof event.webkitCompassHeading === "number" ? event.webkitCompassHeading : null;
         const alpha = typeof event.alpha === "number" ? (360 - event.alpha) : null;
         setCompassHeading(webkitValue !== null ? webkitValue : alpha);
       };
 
-      window.addEventListener("deviceorientationabsolute", handleOrientation, true);
-      window.addEventListener("deviceorientation", handleOrientation, true);
+      window.addEventListener("deviceorientationabsolute", compassHandler, true);
+      window.addEventListener("deviceorientation", compassHandler, true);
+    }
+
+    function stopCompass() {
+      if (!compassStarted || !compassHandler) {
+        compassHeadingEl.textContent = "Compass: --";
+        compassStateEl.textContent = "Compass inactive";
+        return;
+      }
+
+      window.removeEventListener("deviceorientationabsolute", compassHandler, true);
+      window.removeEventListener("deviceorientation", compassHandler, true);
+      compassStarted = false;
+      compassHandler = null;
+      compassHeadingEl.textContent = "Compass: --";
+      compassStateEl.textContent = "Compass disabled";
     }
 
     async function startCompass() {
@@ -1070,14 +1088,15 @@
     });
 
     resetLocationBtn.addEventListener("click", () => {
-      clearCurrentLocation();
-      liveMode = "device";
-      startLiveRefresh();
-      requestDeviceLocationUpdate(false);
+      window.location.reload();
     });
 
     enableCompassBtn.addEventListener("click", () => {
       startCompass();
+    });
+
+    disableCompassBtn.addEventListener("click", () => {
+      stopCompass();
     });
 
     startLocalClock();
