@@ -331,7 +331,9 @@
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="./app-config.js"></script>
   <script>
+    const appConfig = window.WEATHER_APP_CONFIG || {};
     const statusEl = document.getElementById("status");
     const locationLabel = document.getElementById("locationLabel");
     const weatherGrid = document.getElementById("weatherGrid");
@@ -355,9 +357,9 @@
       places: 15 * 60 * 1000,
       photo: 7 * 24 * 60 * 60 * 1000
     };
-    const GOOGLE_PLACES_API_KEY = String(window.GOOGLE_PLACES_API_KEY || "").trim();
-    const BING_IMAGE_SEARCH_KEY = String(window.BING_IMAGE_SEARCH_KEY || "").trim();
-    const IMAGE_SEARCH_PROXY = String(window.IMAGE_SEARCH_PROXY || "").trim();
+    const GOOGLE_PLACES_API_KEY = String(appConfig.googlePlacesApiKey || window.GOOGLE_PLACES_API_KEY || "").trim();
+    const BING_IMAGE_SEARCH_KEY = String(appConfig.bingImageSearchKey || window.BING_IMAGE_SEARCH_KEY || "").trim();
+    const IMAGE_SEARCH_PROXY = String(appConfig.imageSearchProxy || window.IMAGE_SEARCH_PROXY || "").trim();
 
     const weatherCodeMap = {
       0: "Clear sky",
