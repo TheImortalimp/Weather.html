@@ -2,7 +2,7 @@
   "name": "Weather.html",
   "short_name": "Weather",
   "description": "Community Weather Map with live local weather, map, and timezone-aware clock.",
-  "start_url": "./Weather.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f3f6ff",
@@ -11,15 +11,15 @@
   "categories": ["weather", "navigation", "utilities"],
   "icons": [
     {
-      "src": "./icons/icon-192.svg",
+      "src": "./icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./icons/icon-512.svg",
+      "src": "./icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]
