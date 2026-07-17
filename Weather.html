@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Community Weather Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Mobile-friendly weather app with explicit permissions, open data, local map places, and optional place photos.">
+  <link rel="preconnect" href="https://api.open-meteo.com">
+  <link rel="preconnect" href="https://overpass-api.de">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+
+  <style>
+    :root {
+      --bg-start: #f3f6ff;
+      --bg-end: #cfe7df;
+      --ink: #182226;
+      --muted: #4c5a5f;
+      --surface: rgba(255, 255, 255, 0.86);
+      --surface-strong: rgba(255, 255, 255, 0.95);
+      --accent: #0f766e;
+      --accent-2: #125b9a;
+      --danger: #9f1239;
+      --shadow: 0 14px 36px rgba(22, 40, 60, 0.16);
+      --radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 88% 8%, rgba(32, 130, 153, 0.26), transparent 38%),
+        radial-gradient(circle at 4% 93%, rgba(40, 155, 112, 0.24), transparent 37%),
+        linear-gradient(140deg, var(--bg-start), var(--bg-end));
+      padding: 16px;
+    }
+
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--surface);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.5rem, 4vw, 2.3rem);
+      line-height: 1.1;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    button,
+    input {
+      border: none;
+      border-radius: 12px;
+      min-height: 44px;
+      padding: 0 14px;
+      font-size: 1rem;
+    }
+
+    button {
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease;
+    }
+
+    button:hover,
+    button:focus-visible {
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+      outline: none;
+    }
+
+    input {
+      background: var(--surface-strong);
+      color: var(--ink);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      flex: 1 1 220px;
+    }
+
+    .status {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(15, 118, 110, 0.13);
+      color: #0b4a45;
+      font-weight: 600;
+      font-size: 0.94rem;
+    }
+
+    .clock-wrap {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(18, 91, 154, 0.12);
+      color: #123a63;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .clock-time {
+      font-size: clamp(1.1rem, 3.4vw, 1.55rem);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .clock-zone {
+      font-size: 0.9rem;
+      color: #2d4f69;
+      font-weight: 600;
+    }
+
+    .status.error {
+      background: rgba(190, 24, 93, 0.12);
+      color: var(--danger);
+    }
+
+    .weather-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .metric {
+      background: var(--surface-strong);
+      border-radius: 12px;
+      padding: 11px;
+      border: 1px solid rgba(0, 0, 0, 0.06);
+    }
+
+    .metric h3 {
+      margin: 0;
+      font-size: 0.78rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .metric p {
+      margin-top: 6px;
+      color: var(--ink);
+      font-size: 1.08rem;
+      font-weight: 700;
+    }
+
+    #map {
+      width: 100%;
+      height: 340px;
+      border-radius: 14px;
+      overflow: hidden;
+      margin-top: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .places-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .place {
+      background: var(--surface-strong);
+      border: 1px solid rgba(0, 0, 0, 0.07);
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 0.95rem;
+      color: #1b2a2f;
+    }
+
+    .gallery {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .gallery figure {
+      margin: 0;
+      background: var(--surface-strong);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .gallery img {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+      display: block;
+      background: linear-gradient(135deg, #d6f0e8, #b8dced);
+    }
+
+    .gallery figcaption {
+      padding: 8px;
+      font-size: 0.85rem;
+      color: #24333a;
+    }
+
+    .small {
+      font-size: 0.84rem;
+      color: #425258;
+      margin-top: 8px;
+    }
+
+    @media (min-width: 760px) {
+      body {
+        padding: 24px;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .gallery {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 420px) {
+      .weather-grid,
+      .gallery {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <section class="card">
+      <h1>Community Weather Map</h1>
+      <p>
+        Mobile-friendly weather and nearby establishment explorer using open APIs.
+        This page only uses location after you tap a button and grant permission.
+      </p>
+      <div class="toolbar">
+        <button id="locateBtn" type="button">Use My Location</button>
+        <input id="cityInput" type="text" placeholder="Or search city (example: Seattle)">
+        <button id="cityBtn" type="button">Search City</button>
+      </div>
+      <div class="clock-wrap" aria-live="polite">
+        <span id="localClock" class="clock-time">--:--:--</span>
+        <span id="timeZoneLabel" class="clock-zone">Detecting local timezone...</span>
+      </div>
+      <div id="status" class="status" role="status" aria-live="polite">Ready.</div>
+      <p class="small">
+        Privacy note: browsers cannot and should not silently enable Bluetooth, roaming, Wi-Fi, or local device scanning.
+      </p>
+    </section>
+
+    <section class="split">
+      <article class="card">
+        <h2>Current Weather</h2>
+        <p id="locationLabel">No location selected.</p>
+        <div id="weatherGrid" class="weather-grid"></div>
+      </article>
+
+      <article class="card">
+        <h2>Nearby Places</h2>
+        <p>OpenStreetMap establishments near your selected point.</p>
+        <div id="placesList" class="places-list"></div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Local Map</h2>
+      <div id="map" aria-label="Map showing your location and nearby places"></div>
+      <p class="small">Map data from OpenStreetMap contributors.</p>
+    </section>
+
+    <section class="card">
+      <h2>Public Place Photos</h2>
+      <p>Optional preview images sourced from Wikimedia Commons by place name.</p>
+      <div id="gallery" class="gallery"></div>
+    </section>
+
+    <section class="card">
+      <h2>Open-Source Components</h2>
+      <p>
+        Data and libraries: Open-Meteo, OpenStreetMap, Overpass API, Leaflet, Wikimedia Commons.
+        Suitable for open-source projects with transparent permission prompts.
+      </p>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const locationLabel = document.getElementById("locationLabel");
+    const weatherGrid = document.getElementById("weatherGrid");
+    const placesList = document.getElementById("placesList");
+    const gallery = document.getElementById("gallery");
+    const cityInput = document.getElementById("cityInput");
+    const locateBtn = document.getElementById("locateBtn");
+    const cityBtn = document.getElementById("cityBtn");
+    const localClockEl = document.getElementById("localClock");
+    const timeZoneLabelEl = document.getElementById("timeZoneLabel");
+    const LIVE_REFRESH_MS = 150000;
+
+    const weatherCodeMap = {
+      0: "Clear sky",
+      1: "Mainly clear",
+      2: "Partly cloudy",
+      3: "Overcast",
+      45: "Fog",
+      48: "Depositing rime fog",
+      51: "Light drizzle",
+      53: "Moderate drizzle",
+      55: "Dense drizzle",
+      56: "Freezing drizzle",
+      57: "Freezing drizzle",
+      61: "Slight rain",
+      63: "Moderate rain",
+      65: "Heavy rain",
+      66: "Freezing rain",
+      67: "Freezing rain",
+      71: "Slight snow",
+      73: "Moderate snow",
+      75: "Heavy snow",
+      77: "Snow grains",
+      80: "Rain showers",
+      81: "Rain showers",
+      82: "Violent rain showers",
+      85: "Snow showers",
+      86: "Heavy snow showers",
+      95: "Thunderstorm",
+      96: "Thunderstorm with hail",
+      99: "Thunderstorm with heavy hail"
+    };
+
+    const map = L.map("map", { zoomControl: true }).setView([20, 0], 2);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    let userMarker = null;
+    let placeLayer = L.layerGroup().addTo(map);
+    let refreshTimerId = null;
+    let refreshInProgress = false;
+    let liveMode = "none";
+    let selectedLocation = null;
+
+    function setStatus(message, isError = false) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", isError);
+    }
+
+    function toF(celsius) {
+      return (celsius * 9 / 5 + 32).toFixed(1);
+    }
+
+    function metricCard(label, value) {
+      return `<article class="metric"><h3>${label}</h3><p>${value}</p></article>`;
+    }
+
+    function startLocalClock() {
+      const resolvedZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local timezone";
+      timeZoneLabelEl.textContent = `Timezone: ${resolvedZone}`;
+
+      function tick() {
+        const now = new Date();
+        localClockEl.textContent = now.toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false
+        });
+      }
+
+      tick();
+      setInterval(tick, 1000);
+    }
+
+    function startLiveRefresh() {
+      if (refreshTimerId) {
+        clearInterval(refreshTimerId);
+      }
+
+      refreshTimerId = setInterval(() => {
+        if (refreshInProgress) return;
+
+        if (liveMode === "device") {
+          requestDeviceLocationUpdate(true);
+          return;
+        }
+
+        if (liveMode === "fixed" && selectedLocation) {
+          loadDashboard(selectedLocation.lat, selectedLocation.lon, selectedLocation.label, true);
+        }
+      }, LIVE_REFRESH_MS);
+    }
+
+    async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        return response;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    async function reverseLabel(lat, lon) {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2`;
+      const response = await fetchJsonWithTimeout(url, 7000);
+      if (!response.ok) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+      const data = await response.json();
+      return data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    }
+
+    async function searchCity(city) {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(city)}&limit=1`;
+      const response = await fetchJsonWithTimeout(url, 9000);
+      if (!response.ok) throw new Error("City lookup failed.");
+      const data = await response.json();
+      if (!data.length) throw new Error("City not found.");
+      return {
+        lat: Number(data[0].lat),
+        lon: Number(data[0].lon),
+        label: data[0].display_name
+      };
+    }
+
+    async function fetchWeather(lat, lon) {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day&hourly=precipitation_probability&forecast_days=1&timezone=auto`;
+      const response = await fetchJsonWithTimeout(url, 9000);
+      if (!response.ok) throw new Error("Weather lookup failed.");
+      return response.json();
+    }
+
+    async function fetchNearbyPlaces(lat, lon) {
+      const query = `
+        [out:json][timeout:25];
+        (
+          node(around:1200,${lat},${lon})[amenity];
+          way(around:1200,${lat},${lon})[amenity];
+          node(around:1200,${lat},${lon})[shop];
+        );
+        out center 20;
+      `;
+      const endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter"
+      ];
+
+      let data = null;
+      let lastStatus = "";
+
+      for (const endpoint of endpoints) {
+        const requestUrl = `${endpoint}?data=${encodeURIComponent(query.trim())}`;
+        try {
+          const response = await fetchJsonWithTimeout(requestUrl, 8000);
+          if (!response.ok) {
+            lastStatus = String(response.status);
+            continue;
+          }
+          data = await response.json();
+          break;
+        } catch (error) {
+          lastStatus = error.message || "request failed";
+        }
+      }
+
+      if (!data) {
+        throw new Error(`Nearby places lookup failed (${lastStatus || "unavailable"}).`);
+      }
+
+      return (data.elements || []).map((entry) => {
+        const latValue = entry.lat || (entry.center && entry.center.lat);
+        const lonValue = entry.lon || (entry.center && entry.center.lon);
+        const tags = entry.tags || {};
+        return {
+          name: tags.name || tags.brand || "Unnamed place",
+          type: tags.amenity || tags.shop || "local place",
+          lat: latValue,
+          lon: lonValue
+        };
+      }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 18);
+    }
+
+    async function fetchPhotoForPlace(placeName) {
+      const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(placeName)}&gsrlimit=1&prop=pageimages&pithumbsize=340&format=json&origin=*`;
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      const data = await response.json();
+      const pages = data.query && data.query.pages ? Object.values(data.query.pages) : [];
+      if (!pages.length || !pages[0].thumbnail || !pages[0].thumbnail.source) return null;
+      return pages[0].thumbnail.source;
+    }
+
+    function updateMap(lat, lon, label, places) {
+      map.setView([lat, lon], 14);
+
+      if (userMarker) {
+        userMarker.setLatLng([lat, lon]);
+      } else {
+        userMarker = L.marker([lat, lon]).addTo(map);
+      }
+      userMarker.bindPopup(`Selected location<br>${label}`).openPopup();
+
+      placeLayer.clearLayers();
+      places.forEach((place) => {
+        L.circleMarker([place.lat, place.lon], {
+          radius: 5,
+          color: "#125b9a",
+          fillColor: "#2b89c7",
+          fillOpacity: 0.8,
+          weight: 1
+        }).bindPopup(`<strong>${place.name}</strong><br>${place.type}`).addTo(placeLayer);
+      });
+    }
+
+    function renderWeather(weatherData) {
+      const current = weatherData.current;
+      const hourlyTimes = weatherData.hourly.time;
+      const precipitation = weatherData.hourly.precipitation_probability;
+      const idx = hourlyTimes.indexOf(current.time);
+      const rainProb = idx >= 0 ? precipitation[idx] : precipitation[0];
+      const summary = weatherCodeMap[current.weather_code] || "Unknown conditions";
+
+      weatherGrid.innerHTML = "";
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Condition", summary));
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Temperature", `${current.temperature_2m.toFixed(1)} C / ${toF(current.temperature_2m)} F`));
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Humidity", `${current.relative_humidity_2m}%`));
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Wind", `${current.wind_speed_10m.toFixed(1)} km/h`));
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Rain Chance", `${rainProb}%`));
+      weatherGrid.insertAdjacentHTML("beforeend", metricCard("Day/Night", current.is_day ? "Day" : "Night"));
+    }
+
+    async function renderPlaces(places) {
+      placesList.innerHTML = "";
+      if (!places.length) {
+        placesList.innerHTML = "<div class=\"place\">No nearby places found in this radius.</div>";
+        gallery.innerHTML = "";
+        return;
+      }
+
+      places.forEach((place) => {
+        placesList.insertAdjacentHTML("beforeend", `<div class="place"><strong>${place.name}</strong><br>${place.type}</div>`);
+      });
+
+      const candidates = places.slice(0, 6);
+      const images = await Promise.all(candidates.map((p) => fetchPhotoForPlace(p.name)));
+
+      gallery.innerHTML = "";
+      candidates.forEach((place, index) => {
+        const img = images[index];
+        const imageTag = img ? `<img src="${img}" alt="Photo for ${place.name}">` : "<img alt=\"No photo available\">";
+        gallery.insertAdjacentHTML("beforeend", `<figure>${imageTag}<figcaption>${place.name}</figcaption></figure>`);
+      });
+    }
+
+    async function loadDashboard(lat, lon, explicitLabel, isAutoRefresh = false) {
+      if (refreshInProgress) {
+        if (!isAutoRefresh) {
+          setStatus("Update already in progress...");
+        }
+        return;
+      }
+
+      refreshInProgress = true;
+      try {
+        setStatus(isAutoRefresh ? "Auto-refreshing weather and map..." : "Loading weather, map, and nearby places...");
+
+        const [weatherResult, placesResult, labelResult] = await Promise.allSettled([
+          fetchWeather(lat, lon),
+          fetchNearbyPlaces(lat, lon),
+          explicitLabel ? Promise.resolve(explicitLabel) : reverseLabel(lat, lon)
+        ]);
+
+        if (weatherResult.status !== "fulfilled") {
+          throw new Error("Weather lookup failed.");
+        }
+
+        const weatherData = weatherResult.value;
+        const places = placesResult.status === "fulfilled" ? placesResult.value : [];
+        const label = labelResult.status === "fulfilled"
+          ? (labelResult.value || `${lat.toFixed(4)}, ${lon.toFixed(4)}`)
+          : `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+        selectedLocation = { lat, lon, label };
+
+        locationLabel.textContent = label;
+        renderWeather(weatherData);
+        await renderPlaces(places);
+        updateMap(lat, lon, label, places);
+
+        if (placesResult.status === "fulfilled") {
+          setStatus("Updated successfully. Live refresh every 2.5 minutes.");
+        } else {
+          setStatus("Weather updated. Nearby places are temporarily unavailable. Live refresh every 2.5 minutes.");
+        }
+      } catch (error) {
+        setStatus(error.message || "Something went wrong.", true);
+      } finally {
+        refreshInProgress = false;
+      }
+    }
+
+    function requestDeviceLocationUpdate(isAutoRefresh = false) {
+      if (!navigator.geolocation) {
+        setStatus("Geolocation is not available in this browser.", true);
+        return;
+      }
+
+      if (!isAutoRefresh) {
+        setStatus("Requesting your location permission...");
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          loadDashboard(position.coords.latitude, position.coords.longitude, undefined, isAutoRefresh);
+        },
+        (error) => {
+          setStatus(`Location error: ${error.message}`, true);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 }
+      );
+    }
+
+    locateBtn.addEventListener("click", () => {
+      liveMode = "device";
+      startLiveRefresh();
+      requestDeviceLocationUpdate(false);
+    });
+
+    cityBtn.addEventListener("click", async () => {
+      const city = cityInput.value.trim();
+      if (!city) {
+        setStatus("Enter a city name first.", true);
+        return;
+      }
+
+      try {
+        setStatus("Searching city...");
+        const result = await searchCity(city);
+        liveMode = "fixed";
+        startLiveRefresh();
+        await loadDashboard(result.lat, result.lon, result.label, false);
+      } catch (error) {
+        setStatus(error.message || "City search failed.", true);
+      }
+    });
+
+    startLocalClock();
+  </script>
+</body>
+</html>
