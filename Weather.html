@@ -346,6 +346,15 @@
     const LIVE_REFRESH_MS = 150000;
     const ACCURACY_TARGET_METERS = 50;
     const ACCURACY_TIMEOUT_MS = 20000;
+    const CACHE_KEY = "weather-lite-cache-v1";
+    const CACHE_MAX_ITEMS = 90;
+    const CACHE_TTLS = {
+      weather: 180000,
+      reverse: 7 * 24 * 60 * 60 * 1000,
+      search: 30 * 24 * 60 * 60 * 1000,
+      places: 15 * 60 * 1000,
+      photo: 7 * 24 * 60 * 60 * 1000
+    };
     const GOOGLE_PLACES_API_KEY = String(window.GOOGLE_PLACES_API_KEY || "").trim();
     const BING_IMAGE_SEARCH_KEY = String(window.BING_IMAGE_SEARCH_KEY || "").trim();
     const IMAGE_SEARCH_PROXY = String(window.IMAGE_SEARCH_PROXY || "").trim();
@@ -393,6 +402,89 @@
     let refreshInProgress = false;
     let liveMode = "none";
     let selectedLocation = null;
+    let cacheStore = loadCacheStore();
+
+    function loadCacheStore() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return { items: {} };
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || typeof parsed.items !== "object") {
+          return { items: {} };
+        }
+        return parsed;
+      } catch (error) {
+        return { items: {} };
+      }
+    }
+
+    function saveCacheStore() {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cacheStore));
+      } catch (error) {
+        // Ignore storage limits; app still works without persistence.
+      }
+    }
+
+    function pruneCacheStore() {
+      const now = Date.now();
+      const entries = Object.entries(cacheStore.items || {});
+
+      entries.forEach(([key, entry]) => {
+        if (!entry || typeof entry !== "object") {
+          delete cacheStore.items[key];
+          return;
+        }
+        if (typeof entry.expiresAt === "number" && entry.expiresAt <= now) {
+          delete cacheStore.items[key];
+        }
+      });
+
+      const activeEntries = Object.entries(cacheStore.items || {});
+      if (activeEntries.length <= CACHE_MAX_ITEMS) return;
+
+      activeEntries
+        .sort((a, b) => (a[1].touchedAt || 0) - (b[1].touchedAt || 0))
+        .slice(0, activeEntries.length - CACHE_MAX_ITEMS)
+        .forEach(([key]) => {
+          delete cacheStore.items[key];
+        });
+    }
+
+    function getCachedValue(key) {
+      const entry = cacheStore.items[key];
+      if (!entry) return null;
+
+      if (typeof entry.expiresAt === "number" && entry.expiresAt <= Date.now()) {
+        delete cacheStore.items[key];
+        saveCacheStore();
+        return null;
+      }
+
+      entry.touchedAt = Date.now();
+      saveCacheStore();
+      return entry.value;
+    }
+
+    function setCachedValue(key, value, ttlMs) {
+      const now = Date.now();
+      cacheStore.items[key] = {
+        value,
+        touchedAt: now,
+        expiresAt: now + ttlMs
+      };
+      pruneCacheStore();
+      saveCacheStore();
+      return value;
+    }
+
+    function normalizeQueryKey(text) {
+      return String(text || "").trim().toLowerCase();
+    }
+
+    function coordKey(lat, lon, precision = 3) {
+      return `${Number(lat).toFixed(precision)},${Number(lon).toFixed(precision)}`;
+    }
 
     function setStatus(message, isError = false) {
       statusEl.textContent = message;
@@ -544,32 +636,51 @@
     }
 
     async function reverseLabel(lat, lon) {
+      const cacheKey = `reverse:${coordKey(lat, lon, 4)}`;
+      const cached = getCachedValue(cacheKey);
+      if (cached) return cached;
+
       const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=jsonv2&addressdetails=1&zoom=18`;
       const response = await fetchJsonWithTimeout(url, 7000);
       if (!response.ok) return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
       const data = await response.json();
-      return data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+      const label = data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+      return setCachedValue(cacheKey, label, CACHE_TTLS.reverse);
     }
 
     async function searchCity(city) {
+      const cacheKey = `search:${normalizeQueryKey(city)}`;
+      const cached = getCachedValue(cacheKey);
+      if (cached) return cached;
+
       const best = await getBestAddressMatch(city);
-      return {
+      const result = {
         lat: Number(best.lat),
         lon: Number(best.lon),
         label: best.display_name,
         source: "geocoder",
         accuracy: Number.isFinite(Number(best.importance)) ? Math.max(0, Math.round((1 - Number(best.importance)) * 1000)) : null
       };
+      return setCachedValue(cacheKey, result, CACHE_TTLS.search);
     }
 
     async function fetchWeather(lat, lon) {
+      const cacheKey = `weather:${coordKey(lat, lon, 3)}`;
+      const cached = getCachedValue(cacheKey);
+      if (cached) return cached;
+
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,is_day&hourly=precipitation_probability&forecast_days=1&timezone=auto`;
       const response = await fetchJsonWithTimeout(url, 9000);
       if (!response.ok) throw new Error("Weather lookup failed.");
-      return response.json();
+      const data = await response.json();
+      return setCachedValue(cacheKey, data, CACHE_TTLS.weather);
     }
 
     async function fetchNearbyPlaces(lat, lon) {
+      const cacheKey = `places:${coordKey(lat, lon, 3)}`;
+      const cached = getCachedValue(cacheKey);
+      if (cached) return cached;
+
       const query = `
         [out:json][timeout:25];
         (
@@ -606,7 +717,7 @@
         throw new Error(`Nearby places lookup failed (${lastStatus || "unavailable"}).`);
       }
 
-      return (data.elements || []).map((entry) => {
+      const places = (data.elements || []).map((entry) => {
         const latValue = entry.lat || (entry.center && entry.center.lat);
         const lonValue = entry.lon || (entry.center && entry.center.lon);
         const tags = entry.tags || {};
@@ -617,6 +728,8 @@
           lon: lonValue
         };
       }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 18);
+
+      return setCachedValue(cacheKey, places, CACHE_TTLS.places);
     }
 
     async function fetchGooglePhotoForPlace(placeName) {
@@ -680,6 +793,10 @@
     }
 
     async function fetchPhotoForPlace(placeName) {
+      const cacheKey = `photo:${normalizeQueryKey(placeName)}`;
+      const cached = getCachedValue(cacheKey);
+      if (cached) return cached;
+
       const providers = [
         fetchGooglePhotoForPlace,
         fetchBingPhotoForPlace,
@@ -689,7 +806,9 @@
       for (const provider of providers) {
         try {
           const result = await provider(placeName);
-          if (result && result.url) return result;
+          if (result && result.url) {
+            return setCachedValue(cacheKey, result, CACHE_TTLS.photo);
+          }
         } catch (error) {
           console.warn("Photo provider failed:", error);
         }
