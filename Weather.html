@@ -324,7 +324,7 @@
     <section class="card">
       <h2>Open-Source Components</h2>
       <p>
-        Core stack: Open-Meteo, OpenStreetMap, Nominatim, Overpass API, Leaflet, and Wikimedia Commons.
+        Core stack: Open-Meteo, OpenStreetMap, Nominatim, Overpass API, Wikidata, Leaflet, and Wikimedia Commons.
         Optional photo providers: Google Places API and Bing Image Search API (requires your own keys).
       </p>
     </section>
@@ -678,6 +678,71 @@
       return setCachedValue(cacheKey, data, CACHE_TTLS.weather);
     }
 
+    function parseWikidataPoint(pointLiteral) {
+      if (!pointLiteral) return null;
+      const match = String(pointLiteral).match(/Point\(([-\d.]+)\s+([-\d.]+)\)/);
+      if (!match) return null;
+      const lon = Number(match[1]);
+      const lat = Number(match[2]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+      return { lat, lon };
+    }
+
+    async function fetchWikidataPlaces(lat, lon) {
+      const sparql = `
+        SELECT ?item ?itemLabel ?coord ?instanceLabel WHERE {
+          SERVICE wikibase:around {
+            ?item wdt:P625 ?coord .
+            bd:serviceParam wikibase:center "Point(${lon} ${lat})"^^geo:wktLiteral .
+            bd:serviceParam wikibase:radius "2" .
+          }
+          OPTIONAL { ?item wdt:P31 ?instance . }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,nl". }
+        }
+        LIMIT 30
+      `;
+
+      const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
+      const response = await fetchJsonWithTimeout(url, 10000, {
+        headers: {
+          Accept: "application/sparql-results+json"
+        }
+      });
+
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      const rows = data && data.results && Array.isArray(data.results.bindings)
+        ? data.results.bindings
+        : [];
+
+      const seen = new Set();
+      const places = [];
+
+      rows.forEach((row) => {
+        const name = row.itemLabel && row.itemLabel.value ? row.itemLabel.value.trim() : "";
+        const coord = parseWikidataPoint(row.coord && row.coord.value);
+        if (!name || !coord) return;
+
+        const type = row.instanceLabel && row.instanceLabel.value
+          ? row.instanceLabel.value
+          : "Wikidata place";
+
+        const key = `${name.toLowerCase()}@${coordKey(coord.lat, coord.lon, 4)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        places.push({
+          name,
+          type,
+          lat: coord.lat,
+          lon: coord.lon
+        });
+      });
+
+      return places.slice(0, 18);
+    }
+
     async function fetchNearbyPlaces(lat, lon) {
       const cacheKey = `places:${coordKey(lat, lon, 3)}`;
       const cached = getCachedValue(cacheKey);
@@ -715,21 +780,32 @@
         }
       }
 
-      if (!data) {
-        throw new Error(`Nearby places lookup failed (${lastStatus || "unavailable"}).`);
+      let places = [];
+
+      if (data) {
+        places = (data.elements || []).map((entry) => {
+          const latValue = entry.lat || (entry.center && entry.center.lat);
+          const lonValue = entry.lon || (entry.center && entry.center.lon);
+          const tags = entry.tags || {};
+          return {
+            name: tags.name || tags.brand || "Unnamed place",
+            type: tags.amenity || tags.shop || "local place",
+            lat: latValue,
+            lon: lonValue
+          };
+        }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 18);
       }
 
-      const places = (data.elements || []).map((entry) => {
-        const latValue = entry.lat || (entry.center && entry.center.lat);
-        const lonValue = entry.lon || (entry.center && entry.center.lon);
-        const tags = entry.tags || {};
-        return {
-          name: tags.name || tags.brand || "Unnamed place",
-          type: tags.amenity || tags.shop || "local place",
-          lat: latValue,
-          lon: lonValue
-        };
-      }).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon)).slice(0, 18);
+      if (!places.length) {
+        const wikidataPlaces = await fetchWikidataPlaces(lat, lon);
+        if (wikidataPlaces.length) {
+          return setCachedValue(cacheKey, wikidataPlaces, CACHE_TTLS.places);
+        }
+      }
+
+      if (!places.length) {
+        throw new Error(`Nearby places lookup failed (${lastStatus || "unavailable"}).`);
+      }
 
       return setCachedValue(cacheKey, places, CACHE_TTLS.places);
     }
