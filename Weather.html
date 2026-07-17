@@ -315,8 +315,7 @@
     <section class="card">
       <h2>Public Place Photos</h2>
       <p>
-        Optional preview images from Google Places or Bing Image Search when configured,
-        with Wikimedia Commons fallback when no official source is available.
+        Optional preview images sourced from Wikimedia Commons by place name.
       </p>
       <div id="gallery" class="gallery"></div>
     </section>
@@ -324,16 +323,14 @@
     <section class="card">
       <h2>Open-Source Components</h2>
       <p>
-        Core stack: Open-Meteo, OpenStreetMap, Nominatim, Overpass API, Wikidata, Leaflet, and Wikimedia Commons.
-        Optional photo providers: Google Places API and Bing Image Search API (requires your own keys).
+        Open stack in use: Open-Meteo, OpenStreetMap (tiles/data), Nominatim, Overpass API, Wikidata,
+        Leaflet, and Wikimedia Commons.
       </p>
     </section>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="./app-config.js"></script>
   <script>
-    const appConfig = window.WEATHER_APP_CONFIG || {};
     const statusEl = document.getElementById("status");
     const locationLabel = document.getElementById("locationLabel");
     const weatherGrid = document.getElementById("weatherGrid");
@@ -357,9 +354,6 @@
       places: 15 * 60 * 1000,
       photo: 7 * 24 * 60 * 60 * 1000
     };
-    const GOOGLE_PLACES_API_KEY = String(appConfig.googlePlacesApiKey || window.GOOGLE_PLACES_API_KEY || "").trim();
-    const BING_IMAGE_SEARCH_KEY = String(appConfig.bingImageSearchKey || window.BING_IMAGE_SEARCH_KEY || "").trim();
-    const IMAGE_SEARCH_PROXY = String(appConfig.imageSearchProxy || window.IMAGE_SEARCH_PROXY || "").trim();
 
     const weatherCodeMap = {
       0: "Clear sky",
@@ -620,12 +614,6 @@
       setStatus("Location reset. Polling your current position again every 2.5 minutes.");
     }
 
-    function withOptionalProxy(url) {
-      if (!IMAGE_SEARCH_PROXY) return url;
-      const prefix = IMAGE_SEARCH_PROXY.endsWith("/") ? IMAGE_SEARCH_PROXY : `${IMAGE_SEARCH_PROXY}/`;
-      return `${prefix}${encodeURIComponent(url)}`;
-    }
-
     async function fetchJsonWithTimeout(url, timeoutMs = 9000, requestInit = {}) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -810,53 +798,6 @@
       return setCachedValue(cacheKey, places, CACHE_TTLS.places);
     }
 
-    async function fetchGooglePhotoForPlace(placeName) {
-      if (!GOOGLE_PLACES_API_KEY) return null;
-
-      const searchUrl = withOptionalProxy(
-        `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(placeName)}&inputtype=textquery&fields=name,photos,place_id&key=${encodeURIComponent(GOOGLE_PLACES_API_KEY)}`
-      );
-
-      const response = await fetchJsonWithTimeout(searchUrl, 9000);
-      if (!response.ok) return null;
-
-      const data = await response.json();
-      const candidate = Array.isArray(data.candidates) ? data.candidates[0] : null;
-      const photoRef = candidate && Array.isArray(candidate.photos) && candidate.photos[0]
-        ? candidate.photos[0].photo_reference
-        : null;
-
-      if (!photoRef) return null;
-      return {
-        url: `https://maps.googleapis.com/maps/api/place/photo?maxwidth=640&photo_reference=${encodeURIComponent(photoRef)}&key=${encodeURIComponent(GOOGLE_PLACES_API_KEY)}`,
-        source: "Google Places"
-      };
-    }
-
-    async function fetchBingPhotoForPlace(placeName) {
-      if (!BING_IMAGE_SEARCH_KEY) return null;
-
-      const searchUrl = withOptionalProxy(
-        `https://api.bing.microsoft.com/v7.0/images/search?q=${encodeURIComponent(placeName)}&count=1&safeSearch=Moderate`
-      );
-
-      const response = await fetchJsonWithTimeout(searchUrl, 9000, {
-        headers: {
-          "Ocp-Apim-Subscription-Key": BING_IMAGE_SEARCH_KEY
-        }
-      });
-
-      if (!response.ok) return null;
-      const data = await response.json();
-      const first = Array.isArray(data.value) ? data.value[0] : null;
-      if (!first || !first.contentUrl) return null;
-
-      return {
-        url: first.contentUrl,
-        source: "Bing"
-      };
-    }
-
     async function fetchWikimediaPhotoForPlace(placeName) {
       const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(placeName)}&gsrlimit=1&prop=pageimages&pithumbsize=340&format=json&origin=*`;
       const response = await fetchJsonWithTimeout(url, 7000);
@@ -875,21 +816,13 @@
       const cached = getCachedValue(cacheKey);
       if (cached) return cached;
 
-      const providers = [
-        fetchGooglePhotoForPlace,
-        fetchBingPhotoForPlace,
-        fetchWikimediaPhotoForPlace
-      ];
-
-      for (const provider of providers) {
-        try {
-          const result = await provider(placeName);
-          if (result && result.url) {
-            return setCachedValue(cacheKey, result, CACHE_TTLS.photo);
-          }
-        } catch (error) {
-          console.warn("Photo provider failed:", error);
+      try {
+        const result = await fetchWikimediaPhotoForPlace(placeName);
+        if (result && result.url) {
+          return setCachedValue(cacheKey, result, CACHE_TTLS.photo);
         }
+      } catch (error) {
+        console.warn("Photo provider failed:", error);
       }
 
       return null;
